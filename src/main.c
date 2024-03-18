@@ -1,7 +1,5 @@
 #include <swilib.h>
-#include <stdlib.h>
 #include <stdint.h>
-#include <sie/sie.h>
 #include <mplayer.h>
 
 int SOCKET;
@@ -11,6 +9,8 @@ const int minus11 = -11;
 unsigned short maincsm_name_body[140];
 
 void Connect();
+void Connect_Proc();
+void Reconnect_Proc();
 
 typedef struct {
     CSM_RAM csm;
@@ -29,6 +29,7 @@ struct {
 };
 
 void Connect() {
+    static GBSTMR tmr;
     SOCKET = socket(1, 1, 0);
     if (SOCKET != -1) {
         int err = 1;
@@ -48,7 +49,11 @@ void Connect() {
         } else {
             CONNECT_STATE = 0;
             closesocket(SOCKET);
+            GBS_StartTimerProc(&tmr, 216 * 3, Connect_Proc);
         }
+    } else {
+        CONNECT_STATE = 0;
+        GBS_StartTimerProc(&tmr, 216 * 3, Connect_Proc);
     }
 }
 
@@ -64,6 +69,10 @@ void Disconnect() {
 void Reconnect() {
     Disconnect();
     Connect();
+}
+
+void Connect_Proc() {
+    SUBPROC(Connect);
 }
 
 void Reconnect_Proc() {
@@ -107,7 +116,10 @@ int maincsm_onmessage(CSM_RAM *data, GBS_MSG *msg) {
                     SUBPROC(Command);
                     break;
                 case ENIP_SOCK_CLOSED: case ENIP_SOCK_REMOTE_CLOSED:
-                    GBS_StartTimerProc(&tmr, 216, Reconnect_Proc);
+                    if (CONNECT_STATE) {
+                        CONNECT_STATE = 0;
+                        GBS_StartTimerProc(&tmr, 216 * 3, Reconnect_Proc);
+                    }
                     break;
             }
         }
