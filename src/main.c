@@ -1,9 +1,8 @@
-#include <stdio.h>
-#include <swilib.h>
 #include <stdint.h>
 #include <string.h>
+#include <swilib.h>
 #include <mplayer.h>
-#include <nu_swilib.h>
+#include <swilib/nucleus.h>
 
 enum {
     CONNECT_STATE_NONE,
@@ -14,7 +13,7 @@ enum {
 
 int SOCKET;
 int DNR_ID;
-GBSTMR tmr_connect, tmr_ping;
+GBSTMR tmr_connect, tmr_send_data, tmr_send_data_loop;
 
 int PONG;
 unsigned int CONNECT_STATE = CONNECT_STATE_NONE;
@@ -25,13 +24,14 @@ unsigned short maincsm_name_body[140];
 void Connect();
 void Connect_Proc();
 void Reconnect_Proc();
+void DelTimers();
 
 typedef struct {
     CSM_RAM csm;
 } MAIN_CSM;
 
 struct {
-    char song[256];
+    char track[256];
     char status;
     uint8_t volume;
     uint8_t muted;
@@ -69,6 +69,7 @@ void Connect() {
             } else {
                 goto RETRY;
             }
+//            sa.ip = htonl(IP_ADDR(95, 31, 215, 212));
             if (connect(SOCKET, &sa, sizeof(SOCK_ADDR)) != -1) {
                 CONNECT_STATE = CONNECT_STATE_CONNECT;
                 return;
@@ -96,17 +97,44 @@ void Reconnect() {
     Connect();
 }
 
-void Ping() {
-    static uint8_t p = 0xFF;
-    PONG = 0;
-    send(SOCKET, &p, sizeof(uint8_t), 0);
-}
-
-void SendData() {
+void SetData() {
+    zeromem(&DATA, sizeof(DATA));
     if (!IsPlayerOn()) {
         DATA.status = -1;
     } else {
+        // track
+        WSHDR *dir_ws = (WSHDR*)GetLastAudioTrackDir();
+        WSHDR *filename_ws = (WSHDR*)GetLastAudioTrackFilename();
+
+        FILE_PROP file_prop = { 0 };
+        file_prop.type = FILE_PROP_TYPE_MUSIC;
+        file_prop.filename = AllocWS(256);
+        file_prop.tag_title_ws = AllocWS(64);
+        file_prop.tag_artist_ws = AllocWS(64);
+
+        wsprintf(file_prop.filename, "%w\\%w", dir_ws, filename_ws);
+        if (GetFileProp(&file_prop, filename_ws, dir_ws)) {
+            ssize_t len;
+            if (wstrlen(file_prop.tag_artist_ws) && wstrlen(file_prop.tag_title_ws)) {
+                WSHDR *track = AllocWS(192);
+                wsprintf(track, "%w - %w", file_prop.tag_artist_ws, file_prop.tag_title_ws);
+                ws_2utf8(track, DATA.track, &len, 255);
+                FreeWS(track);
+            } else {
+                ws_2utf8(filename_ws, DATA.track, &len, 255);
+            }
+        }
+        FreeWS(file_prop.filename);
+        FreeWS(file_prop.tag_title_ws);
+        FreeWS(file_prop.tag_artist_ws);
+        // status
         DATA.status = GetPlayStatus();
+    }
+}
+
+void SendData(int reset_pong) {
+    if (reset_pong) {
+        PONG = 0;
     }
     send(SOCKET, &DATA, sizeof(DATA), 0);
 }
@@ -120,32 +148,50 @@ void Reconnect_Proc() {
     SUBPROC(Reconnect);
 }
 
-void Ping_Proc() {
+void SendData_Proc() {
+    SetData();
+    SUBPROC(SendData, 0);
+}
+
+void SendDataLoop() {
     if (CONNECT_STATE == CONNECT_STATE_CONNECTED) {
         if (!PONG) {
             shutdown(SOCKET, SHUT_RDWR);
             closesocket(SOCKET);
             return;
         }
-        SUBPROC(Ping);
+        DelTimers();
+        SetData();
+        SUBPROC(SendData, 1);
+        GBS_StartTimerProc(&tmr_send_data_loop, 216 * 10, SendDataLoop);
     }
-    GBS_StartTimerProc(&tmr_ping, 216 * 5, Ping_Proc);
+}
+
+void StartTimers() {
+    GBS_StartTimerProc(&tmr_send_data, 216 * 2, SendData_Proc);
+    GBS_StartTimerProc(&tmr_send_data_loop, 216 * 10, SendDataLoop);
+}
+
+void DelTimers() {
+    GBS_DelTimer(&tmr_connect);
+    GBS_DelTimer(&tmr_send_data);
+    GBS_DelTimer(&tmr_send_data_loop);
 }
 
 void Receive() {
     uint8_t cmd;
     if (CONNECT_STATE == CONNECT_STATE_CONNECTED) {
         if (recv(SOCKET, &cmd, 1, 0)) {
-            if (cmd == 0xFF) {
-                PONG = 1;
-            }
-            else {
+            PONG = 1;
+            if (cmd != 0xFF) { // just ping
                 if (cmd == PLAYER_PREV || cmd == PLAYER_NEXT || cmd == PLAYER_PLAY) {
                     if (!IsPlayerOn()) {
                         MEDIA_PLAYLAST();
                     }
                 }
                 Send_MPlayer_Command(cmd, 0);
+                DelTimers();
+                StartTimers();
             }
         }
     }
@@ -156,11 +202,9 @@ int maincsm_onmessage(CSM_RAM *data, GBS_MSG *msg) {
         if ((int)msg->data1 == SOCKET) {
             switch ((int)msg->data0) {
                 case ENIP_SOCK_CONNECTED:
-                    GBS_DelTimer(&tmr_ping);
-                    GBS_DelTimer(&tmr_connect);
                     CONNECT_STATE = CONNECT_STATE_CONNECTED;
-                    SUBPROC(Ping);
-                    GBS_StartTimerProc(&tmr_ping, 216 * 5, Ping_Proc);
+                    DelTimers();
+                    StartTimers();
                     ShowMSG(1, (int)"Connected!");
                     break;
                 case ENIP_SOCK_DATA_READ:
@@ -169,9 +213,8 @@ int maincsm_onmessage(CSM_RAM *data, GBS_MSG *msg) {
                 case ENIP_SOCK_CLOSED: case ENIP_SOCK_REMOTE_CLOSED:
                     if (CONNECT_STATE != CONNECT_STATE_NONE) {
                         CONNECT_STATE = CONNECT_STATE_NONE;
-                        GBS_DelTimer(&tmr_ping);
-                        GBS_DelTimer(&tmr_connect);
                         PONG = 0;
+                        DelTimers();
                         GBS_StartTimerProc(&tmr_connect, 216 * 3, Reconnect_Proc);
                     }
                     break;
@@ -186,9 +229,8 @@ void maincsm_oncreate(CSM_RAM *data) {
 }
 
 void maincsm_onclose(CSM_RAM *csm) {
-    GBS_DelTimer(&tmr_ping);
-    GBS_DelTimer(&tmr_connect);
     CONNECT_STATE = CONNECT_STATE_NONE;
+    DelTimers();
     closesocket(SOCKET);
     SUBPROC((void *)kill_elf);
 }
