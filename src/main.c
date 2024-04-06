@@ -186,7 +186,13 @@ void Receive() {
             if (cmd != 0xFF) { // just ping
                 if (cmd == PLAYER_PREV || cmd == PLAYER_NEXT || cmd == PLAYER_PLAY) {
                     if (!IsPlayerOn()) {
+                        if (!IsUnlocked()) {
+                            KbdUnlock();
+                            CloseScreensaver();
+                        }
                         MEDIA_PLAYLAST();
+                        KbdLock();
+                        DrawScreenSaver();
                     }
                 }
                 Send_MPlayer_Command(cmd, 0);
@@ -231,6 +237,7 @@ void maincsm_oncreate(CSM_RAM *data) {
 void maincsm_onclose(CSM_RAM *csm) {
     CONNECT_STATE = CONNECT_STATE_NONE;
     DelTimers();
+    shutdown(SOCKET, SHUT_RDWR);
     closesocket(SOCKET);
     SUBPROC((void *)kill_elf);
 }
