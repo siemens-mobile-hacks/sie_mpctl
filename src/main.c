@@ -3,6 +3,7 @@
 #include <swilib.h>
 #include <mplayer.h>
 #include <swilib/nucleus.h>
+#include "config_loader.h"
 
 enum {
     CONNECT_STATE_NONE,
@@ -10,6 +11,9 @@ enum {
     CONNECT_STATE_CONNECT,
     CONNECT_STATE_CONNECTED,
 };
+
+extern char CFG_PATH[];
+extern char CFG_HOST[];
 
 int SOCKET;
 int DNR_ID;
@@ -51,25 +55,27 @@ void Connect() {
             SOCK_ADDR sa;
             sa.family = 1;
             sa.port = htons(8989); // thanks Viktor89
-            unsigned int errors = 0;
-            CONNECT_STATE = CONNECT_STATE_INITIAL;
-            while (err) {
-                if (errors >= 10) {
+            sa.ip = str2ip(CFG_HOST);
+            if (sa.ip == 0xFFFFFFFF) { // domain
+                unsigned int errors = 0;
+                CONNECT_STATE = CONNECT_STATE_INITIAL;
+                while (err) {
+                    if (errors >= 10) {
+                        goto RETRY;
+                    }
+                    if (CONNECT_STATE == CONNECT_STATE_NONE) {
+                        return;
+                    }
+                    err = async_gethostbyname(CFG_HOST, &pres, &DNR_ID);
+                    NU_Sleep(100);
+                    errors++;
+                }
+                if (pres && pres[3]) {
+                    sa.ip = pres[3][0][0];
+                } else {
                     goto RETRY;
                 }
-                if (CONNECT_STATE == CONNECT_STATE_NONE) {
-                    return;
-                }
-                err = async_gethostbyname("siempctl.ru", &pres, &DNR_ID);
-                NU_Sleep(100);
-                errors++;
             }
-            if (pres && pres[3]) {
-                sa.ip = pres[3][0][0];
-            } else {
-                goto RETRY;
-            }
-//            sa.ip = htonl(IP_ADDR(95, 31, 215, 212));
             if (connect(SOCKET, &sa, sizeof(SOCK_ADDR)) != -1) {
                 CONNECT_STATE = CONNECT_STATE_CONNECT;
                 return;
@@ -226,6 +232,13 @@ int maincsm_onmessage(CSM_RAM *data, GBS_MSG *msg) {
                     break;
             }
         }
+    } else if (msg->msg == MSG_RECONFIGURE_REQ) {
+        if (strcmpi(CFG_PATH, (char *)msg->data0) == 0) {
+            ShowMSG(1, (int)"SieMPCtl config updated!");
+            InitConfig();
+            shutdown(SOCKET, SHUT_RDWR);
+            closesocket(SOCKET);
+        }
     }
     return 1;
 }
@@ -278,6 +291,7 @@ int main() {
     CSM_RAM *save_cmpc;
     char dummy[sizeof(MAIN_CSM)];
     UpdateCSMname();
+    InitConfig();
     LockSched();
     save_cmpc = CSM_root()->csm_q->current_msg_processing_csm;
     CSM_root()->csm_q->current_msg_processing_csm = CSM_root()->csm_q->csm.first;
