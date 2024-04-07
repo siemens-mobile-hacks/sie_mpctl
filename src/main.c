@@ -2,7 +2,9 @@
 #include <string.h>
 #include <swilib.h>
 #include <mplayer.h>
+#include <xtask_ipc.h>
 #include <swilib/nucleus.h>
+#include <sie/sie.h>
 #include "config_loader.h"
 
 enum {
@@ -14,9 +16,11 @@ enum {
 
 extern char CFG_PATH[];
 extern char CFG_HOST[];
+extern char CFG_MP_CSM_ADDR[];
 
 int SOCKET;
 int DNR_ID;
+GBSTMR TMR;
 GBSTMR tmr_connect, tmr_send_data, tmr_send_data_loop;
 
 int PONG;
@@ -45,6 +49,10 @@ struct {
         0,
         0,
 };
+
+unsigned int IsMPOn() {
+    return (Sie_CSM_FindByAddr(CFG_MP_CSM_ADDR)) ? 1 : 0;
+}
 
 void Connect() {
     if (CONNECT_STATE == CONNECT_STATE_NONE && IsGPRSEnabled()) {
@@ -105,7 +113,7 @@ void Reconnect() {
 
 void SetData() {
     zeromem(&DATA, sizeof(DATA));
-    if (!IsPlayerOn()) {
+    if (!IsMPOn()) {
         DATA.status = -1;
     } else {
         // track
@@ -184,6 +192,16 @@ void DelTimers() {
     GBS_DelTimer(&tmr_send_data_loop);
 }
 
+void MediaPlayLastAndLock() {
+    static IPC_REQ ipc;
+    ipc.name_to = IPC_XTASK_NAME;
+    GBS_SendMessage(MMI_CEPID, KEY_DOWN, ENTER_BUTTON);
+    MEDIA_PLAYLAST();
+    GBS_SendMessage(MMI_CEPID, MSG_IPC, IPC_XTASK_IDLE, &ipc);
+    KbdLock();
+    DrawScreenSaver();
+}
+
 void Receive() {
     uint8_t cmd;
     if (CONNECT_STATE == CONNECT_STATE_CONNECTED) {
@@ -191,14 +209,12 @@ void Receive() {
             PONG = 1;
             if (cmd != 0xFF) { // just ping
                 if (cmd == PLAYER_PREV || cmd == PLAYER_NEXT || cmd == PLAYER_PLAY) {
-                    if (!IsPlayerOn()) {
-                        if (!IsUnlocked()) {
-                            KbdUnlock();
-                            CloseScreensaver();
-                        }
-                        MEDIA_PLAYLAST();
-                        KbdLock();
-                        DrawScreenSaver();
+                    if (!IsMPOn()) {
+                        static GBSTMR tmr;
+                        KbdUnlock();
+                        CloseScreensaver();
+                        Sie_Exec_Shortcut("MEDIA_PLAYER");
+                        GBS_StartTimerProc(&tmr, (long)(216 * 1.5), MediaPlayLastAndLock);
                     }
                 }
                 Send_MPlayer_Command(cmd, 0);
@@ -222,7 +238,10 @@ int maincsm_onmessage(CSM_RAM *data, GBS_MSG *msg) {
                 case ENIP_SOCK_DATA_READ:
                     SUBPROC(Receive);
                     break;
-                case ENIP_SOCK_CLOSED: case ENIP_SOCK_REMOTE_CLOSED:
+                case ENIP_SOCK_REMOTE_CLOSED:
+                    SUBPROC(Disconnect);
+                    break;
+                case ENIP_SOCK_CLOSED:
                     if (CONNECT_STATE != CONNECT_STATE_NONE) {
                         CONNECT_STATE = CONNECT_STATE_NONE;
                         PONG = 0;
@@ -250,7 +269,6 @@ void maincsm_oncreate(CSM_RAM *data) {
 void maincsm_onclose(CSM_RAM *csm) {
     CONNECT_STATE = CONNECT_STATE_NONE;
     DelTimers();
-    shutdown(SOCKET, SHUT_RDWR);
     closesocket(SOCKET);
     SUBPROC((void *)kill_elf);
 }
