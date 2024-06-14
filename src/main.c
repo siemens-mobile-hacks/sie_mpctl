@@ -2,7 +2,6 @@
 #include <string.h>
 #include <swilib.h>
 #include <mplayer.h>
-#include <xtask_ipc.h>
 #include <swilib/nucleus.h>
 #include <sie/sie.h>
 #include "config_loader.h"
@@ -193,11 +192,7 @@ void DelTimers() {
 }
 
 void MediaPlayLastAndLock() {
-    static IPC_REQ ipc;
-    ipc.name_to = IPC_XTASK_NAME;
-    GBS_SendMessage(MMI_CEPID, KEY_DOWN, ENTER_BUTTON);
-    MEDIA_PLAYLAST();
-    GBS_SendMessage(MMI_CEPID, MSG_IPC, IPC_XTASK_IDLE, &ipc);
+    MediaProc_LaunchLastPlayback();
     KbdLock();
     DrawScreenSaver();
 }
