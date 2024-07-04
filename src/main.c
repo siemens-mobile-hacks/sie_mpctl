@@ -17,19 +17,14 @@ extern char CFG_PATH[];
 extern char CFG_HOST[];
 extern char CFG_MP_CSM_ADDR[];
 
-int SOCKET;
-int DNR_ID;
-GBSTMR TMR;
-GBSTMR tmr_connect, tmr_send_data, tmr_send_data_loop;
-
-int PONG;
+int SOCKET = -1, PONG = 1;
 unsigned int CONNECT_STATE = CONNECT_STATE_NONE;
+GBSTMR TMR_CONNECT, TMR_SEND_DATA, TMR_SEND_DATA_LOOP;
 
 const int minus11 = -11;
 unsigned short maincsm_name_body[140];
 
 void Connect();
-void Connect_Proc();
 void Reconnect_Proc();
 void DelTimers();
 
@@ -42,67 +37,47 @@ struct {
     char status;
     uint8_t volume;
     uint8_t muted;
-} DATA = {
-        "\0",
-        0,
-        0,
-        0,
-};
+} DATA;
 
 unsigned int IsMPOn() {
     return (Sie_CSM_FindByAddr(CFG_MP_CSM_ADDR)) ? 1 : 0;
+}
+
+void Disconnect() {
+    CONNECT_STATE = CONNECT_STATE_NONE;
+    DelTimers();
+    if (SOCKET) {
+        shutdown(SOCKET, SHUT_RDWR);
+        closesocket(SOCKET);
+        SOCKET = -1;
+    }
 }
 
 void Connect() {
     if (CONNECT_STATE == CONNECT_STATE_NONE && IsGPRSEnabled()) {
         SOCKET = socket(AF_INET, SOCK_STREAM, 0);
         if (SOCKET != -1) {
-            int err = 1;
-            int ***pres = NULL;
-            SOCK_ADDR sa;
-            sa.family = 1;
-            sa.port = htons(8989); // thanks Viktor89
-            sa.ip = str2ip(CFG_HOST);
-            if (sa.ip == 0xFFFFFFFF) { // domain
-                unsigned int errors = 0;
+            HOSTENT *h = NULL;
+            SOCKADDR_IN sa;
+            sa.sin_family = AF_INET;
+            sa.sin_port = htons(8989); // thanks Viktor89
+            sa.sin_addr.s_addr = str2ip(CFG_HOST);
+            if (sa.sin_addr.s_addr == 0xFFFFFFFF) {
                 CONNECT_STATE = CONNECT_STATE_INITIAL;
-                while (err) {
-                    if (errors >= 10) {
-                        goto RETRY;
-                    }
-                    if (CONNECT_STATE == CONNECT_STATE_NONE) {
-                        return;
-                    }
-                    err = async_gethostbyname(CFG_HOST, &pres, &DNR_ID);
-                    NU_Sleep(100);
-                    errors++;
-                }
-                if (pres && pres[3]) {
-                    sa.ip = pres[3][0][0];
-                } else {
-                    goto RETRY;
-                }
+                int dnr_id = 0;
+                async_gethostbyname(CFG_HOST, &h, &dnr_id);
             }
-            if (connect(SOCKET, &sa, sizeof(SOCK_ADDR)) != -1) {
-                CONNECT_STATE = CONNECT_STATE_CONNECT;
-                return;
-            } else {
-                closesocket(SOCKET);
-                return;
+            if (h && h->h_addr_list) {
+                sa.sin_addr = *(struct in_addr*)h->h_addr_list[0];
+                if (connect(SOCKET,     (SOCKADDR*)&sa, sizeof(SOCK_ADDR)) != -1) {
+                    CONNECT_STATE = CONNECT_STATE_CONNECT;
+                    GBS_StartTimerProc(&TMR_CONNECT, 216 * 10, Reconnect_Proc);
+                    return;
+                }
             }
         }
     }
-    RETRY:
-    CONNECT_STATE = CONNECT_STATE_NONE;
-    GBS_StartTimerProc(&tmr_connect, 216 * 3, Connect_Proc);
-}
-
-void Disconnect() {
-    if (SOCKET >= 0) {
-        closesocket(SOCKET);
-        SOCKET = -1;
-    }
-    CONNECT_STATE = CONNECT_STATE_NONE;
+    GBS_StartTimerProc(&TMR_CONNECT, 216 * 3, Reconnect_Proc);
 }
 
 void Reconnect() {
@@ -145,78 +120,69 @@ void SetData() {
     }
 }
 
-void SendData(int reset_pong) {
-    if (reset_pong) {
-        PONG = 0;
+void Send() {
+    if (SOCKET != -1) {
+        send(SOCKET, &DATA, sizeof(DATA), 0);
     }
-    send(SOCKET, &DATA, sizeof(DATA), 0);
-}
-
-
-void Connect_Proc() {
-    SUBPROC(Connect);
 }
 
 void Reconnect_Proc() {
     SUBPROC(Reconnect);
 }
 
-void SendData_Proc() {
+void SendData_Proc(){
     SetData();
-    SUBPROC(SendData, 0);
+    SUBPROC(Send);
 }
 
 void SendDataLoop() {
+    if (!PONG) {
+        SUBPROC(Reconnect);
+        return;
+    }
     if (CONNECT_STATE == CONNECT_STATE_CONNECTED) {
-        if (!PONG) {
-            shutdown(SOCKET, SHUT_RDWR);
-            closesocket(SOCKET);
-            return;
-        }
         DelTimers();
+        PONG = 0;
         SetData();
-        SUBPROC(SendData, 1);
-        GBS_StartTimerProc(&tmr_send_data_loop, 216 * 10, SendDataLoop);
+        SUBPROC(Send);
+        GBS_StartTimerProc(&TMR_SEND_DATA_LOOP, 216 * 5, SendDataLoop);
     }
 }
 
 void StartTimers() {
-    GBS_StartTimerProc(&tmr_send_data, 216 * 2, SendData_Proc);
-    GBS_StartTimerProc(&tmr_send_data_loop, 216 * 10, SendDataLoop);
+    GBS_StartTimerProc(&TMR_SEND_DATA, 216 * 1, SendData_Proc);
+    GBS_StartTimerProc(&TMR_SEND_DATA_LOOP, 216 * 10, SendDataLoop);
 }
 
 void DelTimers() {
-    GBS_DelTimer(&tmr_connect);
-    GBS_DelTimer(&tmr_send_data);
-    GBS_DelTimer(&tmr_send_data_loop);
-}
-
-void MediaPlayLastAndLock() {
-    MediaProc_LaunchLastPlayback();
-    KbdLock();
-    DrawScreenSaver();
+    GBS_DelTimer(&TMR_CONNECT);
+    GBS_DelTimer(&TMR_SEND_DATA);
+    GBS_DelTimer(&TMR_SEND_DATA_LOOP);
 }
 
 void Receive() {
-    uint8_t cmd;
-    if (CONNECT_STATE == CONNECT_STATE_CONNECTED) {
-        if (recv(SOCKET, &cmd, 1, 0)) {
-            PONG = 1;
-            if (cmd != 0xFF) { // just ping
-                if (cmd == PLAYER_PREV || cmd == PLAYER_NEXT || cmd == PLAYER_PLAY) {
-                    if (!IsMPOn()) {
-                        static GBSTMR tmr;
-                        KbdUnlock();
-                        CloseScreensaver();
-                        Sie_Exec_Shortcut("MEDIA_PLAYER");
-                        GBS_StartTimerProc(&tmr, (long)(216 * 1.5), MediaPlayLastAndLock);
+    if (SOCKET != -1) {
+        DelTimers();
+        if (CONNECT_STATE == CONNECT_STATE_CONNECTED) {
+            char *cmd = malloc(1);
+            size_t receive = recv(SOCKET, cmd, 1, 0);
+            if (receive != -1) {
+                if (*cmd != 0xFF) { // just ping
+                    if (*cmd == PLAYER_PREV || *cmd == PLAYER_NEXT || *cmd == PLAYER_PLAY) {
+                        if (!IsMPOn()) {
+                            KbdUnlock();
+                            CloseScreensaver();
+                            MediaProc_LaunchLastPlayback();
+                            KbdLock();
+                            DrawScreenSaver();
+                        }
                     }
+                    Send_MPlayer_Command(*cmd, 0);
                 }
-                Send_MPlayer_Command(cmd, 0);
-                DelTimers();
-                StartTimers();
             }
+            mfree(cmd);
         }
+        StartTimers();
     }
 }
 
@@ -225,24 +191,19 @@ int maincsm_onmessage(CSM_RAM *data, GBS_MSG *msg) {
         if ((int)msg->data1 == SOCKET) {
             switch ((int)msg->data0) {
                 case ENIP_SOCK_CONNECTED:
+                    PONG = 1;
                     CONNECT_STATE = CONNECT_STATE_CONNECTED;
                     DelTimers();
                     StartTimers();
-                    ShowMSG(1, (int)"Connected!");
+                    ShowMSG(1, (int)"SieMPCtl connected to the server");
                     break;
                 case ENIP_SOCK_DATA_READ:
+                    PONG = 1;
                     SUBPROC(Receive);
                     break;
-                case ENIP_SOCK_REMOTE_CLOSED:
-                    SUBPROC(Disconnect);
-                    break;
-                case ENIP_SOCK_CLOSED:
-                    if (CONNECT_STATE != CONNECT_STATE_NONE) {
-                        CONNECT_STATE = CONNECT_STATE_NONE;
-                        PONG = 0;
-                        DelTimers();
-                        GBS_StartTimerProc(&tmr_connect, 216 * 3, Reconnect_Proc);
-                    }
+                case ENIP_SOCK_REMOTE_CLOSED: case ENIP_SOCK_CLOSED:
+                    PONG = 0;
+                    GBS_StartTimerProc(&TMR_CONNECT, 216 * 3, Reconnect_Proc);
                     break;
             }
         }
@@ -250,11 +211,15 @@ int maincsm_onmessage(CSM_RAM *data, GBS_MSG *msg) {
         if (strcmpi(CFG_PATH, (char *)msg->data0) == 0) {
             ShowMSG(1, (int)"SieMPCtl config updated!");
             InitConfig();
-            shutdown(SOCKET, SHUT_RDWR);
-            closesocket(SOCKET);
+            SUBPROC(Reconnect);
         }
     }
     return 1;
+}
+
+void Close() {
+    Disconnect();
+    kill_elf();
 }
 
 void maincsm_oncreate(CSM_RAM *data) {
@@ -262,10 +227,7 @@ void maincsm_oncreate(CSM_RAM *data) {
 }
 
 void maincsm_onclose(CSM_RAM *csm) {
-    CONNECT_STATE = CONNECT_STATE_NONE;
-    DelTimers();
-    closesocket(SOCKET);
-    SUBPROC((void *)kill_elf);
+    SUBPROC(Close)  ;
 }
 
 const struct {
