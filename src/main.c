@@ -69,15 +69,15 @@ void Connect() {
             }
             if (h && h->h_addr_list) {
                 sa.sin_addr = *(struct in_addr*)h->h_addr_list[0];
-                if (connect(SOCKET,     (SOCKADDR*)&sa, sizeof(SOCK_ADDR)) != -1) {
+                if (connect(SOCKET, (SOCKADDR*)&sa, sizeof(SOCK_ADDR)) != -1) {
                     CONNECT_STATE = CONNECT_STATE_CONNECT;
-                    GBS_StartTimerProc(&TMR_CONNECT, 216 * 10, Reconnect_Proc);
+                    GBS_StartTimerProc(&TMR_CONNECT, SecToTicks(10), Reconnect_Proc);
                     return;
                 }
             }
         }
     }
-    GBS_StartTimerProc(&TMR_CONNECT, 216 * 3, Reconnect_Proc);
+    GBS_StartTimerProc(&TMR_CONNECT, SecToTicks(3), Reconnect_Proc);
 }
 
 void Reconnect() {
@@ -145,13 +145,13 @@ void SendDataLoop() {
         PONG = 0;
         SetData();
         SUBPROC(Send);
-        GBS_StartTimerProc(&TMR_SEND_DATA_LOOP, 216 * 5, SendDataLoop);
+        GBS_StartTimerProc(&TMR_SEND_DATA_LOOP, SecToTicks(5), SendDataLoop);
     }
 }
 
 void StartTimers() {
-    GBS_StartTimerProc(&TMR_SEND_DATA, 216 * 1, SendData_Proc);
-    GBS_StartTimerProc(&TMR_SEND_DATA_LOOP, 216 * 10, SendDataLoop);
+    GBS_StartTimerProc(&TMR_SEND_DATA, SecToTicks(1), SendData_Proc);
+    GBS_StartTimerProc(&TMR_SEND_DATA_LOOP, SecToTicks(10), SendDataLoop);
 }
 
 void DelTimers() {
@@ -203,12 +203,12 @@ int maincsm_onmessage(CSM_RAM *data, GBS_MSG *msg) {
                     break;
                 case ENIP_SOCK_REMOTE_CLOSED: case ENIP_SOCK_CLOSED:
                     PONG = 0;
-                    GBS_StartTimerProc(&TMR_CONNECT, 216 * 3, Reconnect_Proc);
+                    GBS_StartTimerProc(&TMR_CONNECT, SecToTicks(3), Reconnect_Proc);
                     break;
             }
         }
     } else if (msg->msg == MSG_RECONFIGURE_REQ) {
-        if (strcmpi(CFG_PATH, (char *)msg->data0) == 0) {
+        if (strcmpi(CFG_PATH, (char*)msg->data0) == 0) {
             ShowMSG(1, (int)"SieMPCtl config updated!");
             InitConfig();
             SUBPROC(Reconnect);
