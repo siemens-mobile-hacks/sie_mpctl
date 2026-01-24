@@ -208,9 +208,9 @@ int maincsm_onmessage(CSM_RAM *data, GBS_MSG *msg) {
             }
         }
     } else if (msg->msg == MSG_RECONFIGURE_REQ) {
-        if (strcmpi(CFG_PATH, (char*)msg->data0) == 0) {
-            ShowMSG(1, (int)"SieMPCtl config updated!");
+        if (strcmpi(CFG_PATH, msg->data0) == 0) {
             InitConfig();
+            ShowMSG(1, (int)"SieMPCtl config updated!");
             SUBPROC(Reconnect);
         }
     }
@@ -222,11 +222,11 @@ void Close() {
     kill_elf();
 }
 
-void maincsm_oncreate(CSM_RAM *data) {
+void OnCreate(CSM_RAM *data) {
     SUBPROC(Connect);
 }
 
-void maincsm_onclose(CSM_RAM *csm) {
+void OnClose(CSM_RAM *csm) {
     SUBPROC(Close)  ;
 }
 
@@ -236,14 +236,14 @@ const struct {
 } MAINCSM = {
         {
                 maincsm_onmessage,
-                maincsm_oncreate,
+                OnCreate,
 #ifdef NEWSGOLD
                 0,
                 0,
                 0,
                 0,
 #endif
-                maincsm_onclose,
+                OnClose,
                 sizeof(MAIN_CSM),
                 1,
                 &minus11
@@ -263,14 +263,13 @@ void UpdateCSMname(void) {
 }
 
 int main() {
-    CSM_RAM *save_cmpc;
     char dummy[sizeof(MAIN_CSM)];
     UpdateCSMname();
     InitConfig();
     LockSched();
-    save_cmpc = CSM_root()->csm_q->current_msg_processing_csm;
+    CSM_RAM *save_cmpc = CSM_root()->csm_q->current_msg_processing_csm;
     CSM_root()->csm_q->current_msg_processing_csm = CSM_root()->csm_q->csm.first;
-    CreateCSM(&MAINCSM.maincsm,dummy,0);
+    CreateCSM(&MAINCSM.maincsm, dummy, 0);
     CSM_root()->csm_q->current_msg_processing_csm = save_cmpc;
     UnlockSched();
     return 0;
