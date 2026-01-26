@@ -4,7 +4,7 @@
 #include <mplayer.h>
 #include <swilib/nucleus.h>
 #include <sie/sie.h>
-#include "config_loader.h"
+#include "config.h"
 
 enum {
     CONNECT_STATE_NONE,
@@ -14,8 +14,6 @@ enum {
 };
 
 extern char CFG_PATH[];
-extern char CFG_HOST[];
-extern char CFG_MP_CSM_ADDR[];
 
 int SOCKET = -1, PONG = 1;
 unsigned int CONNECT_STATE = CONNECT_STATE_NONE;
@@ -40,7 +38,7 @@ struct {
 } DATA;
 
 unsigned int IsMPOn() {
-    return (Sie_CSM_FindByAddr(CFG_MP_CSM_ADDR)) ? 1 : 0;
+    return (Sie_CSM_FindByAddr(CFG.mp_csm_addr)) ? 1 : 0;
 }
 
 void Disconnect() {
@@ -61,11 +59,11 @@ void Connect() {
             SOCKADDR_IN sa;
             sa.sin_family = AF_INET;
             sa.sin_port = htons(8989); // thanks Viktor89
-            sa.sin_addr.s_addr = str2ip(CFG_HOST);
+            sa.sin_addr.s_addr = str2ip(CFG.host);
             if (sa.sin_addr.s_addr == 0xFFFFFFFF) {
                 CONNECT_STATE = CONNECT_STATE_INITIAL;
                 int dnr_id = 0;
-                async_gethostbyname(CFG_HOST, &h, &dnr_id);
+                async_gethostbyname(CFG.host, &h, &dnr_id);
             }
             if (h && h->h_addr_list) {
                 sa.sin_addr = *(struct in_addr*)h->h_addr_list[0];
