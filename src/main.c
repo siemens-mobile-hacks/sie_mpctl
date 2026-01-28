@@ -13,7 +13,10 @@ enum {
     CONNECT_STATE_CONNECTED,
 };
 
-extern char CFG_PATH[];
+enum {
+    CMD_SHUTDOWN = 0xF0,
+    CMD_PING     = 0xFF,
+} Commands;
 
 int SOCKET = -1, PONG = 1;
 unsigned int CONNECT_STATE = CONNECT_STATE_NONE;
@@ -49,6 +52,11 @@ void Disconnect() {
         closesocket(SOCKET);
         SOCKET = -1;
     }
+}
+
+void Shutdown() {
+    Disconnect();
+    SwitchPhoneOff();
 }
 
 void Connect() {
@@ -165,11 +173,12 @@ void Receive() {
     if (SOCKET != -1) {
         DelTimers();
         if (CONNECT_STATE == CONNECT_STATE_CONNECTED) {
-            char *cmd = malloc(1);
-            size_t receive = recv(SOCKET, cmd, 1, 0);
+            char buf[1];
+            size_t receive = recv(SOCKET, buf, 1, 0);
+            uint8_t cmd = *buf;
             if (receive != -1) {
-                if (*cmd != 0xFF) { // just ping
-                    if (*cmd == PLAYER_PREV || *cmd == PLAYER_NEXT || *cmd == PLAYER_PLAY) {
+                if (cmd < 0xF0) {
+                    if (cmd == PLAYER_PREV || cmd == PLAYER_NEXT || cmd == PLAYER_PLAY) {
                         if (!IsMPOn()) {
                             KbdUnlock();
                             CloseScreensaver();
@@ -178,10 +187,11 @@ void Receive() {
                             DrawScreenSaver();
                         }
                     }
-                    Send_MPlayer_Command(*cmd, 0);
+                    Send_MPlayer_Command(cmd, 0);
+                } else if (cmd == CMD_SHUTDOWN) {
+                    SUBPROC(Shutdown);
                 }
             }
-            mfree(cmd);
         }
         StartTimers();
     }
