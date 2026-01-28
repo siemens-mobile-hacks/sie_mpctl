@@ -64,9 +64,12 @@ void Connect() {
                 CONNECT_STATE = CONNECT_STATE_INITIAL;
                 int dnr_id = 0;
                 async_gethostbyname(CFG.host, &h, &dnr_id);
-            }
-            if (h && h->h_addr_list) {
-                sa.sin_addr = *(struct in_addr*)h->h_addr_list[0];
+                if (h && h->h_addr_list) {
+                    sa.sin_addr = *(struct in_addr*)h->h_addr_list[0];
+                    goto CONNECT;
+                }
+            } else {
+                CONNECT:
                 if (connect(SOCKET, (SOCKADDR*)&sa, sizeof(SOCK_ADDR)) != -1) {
                     CONNECT_STATE = CONNECT_STATE_CONNECT;
                     GBS_StartTimerProc(&TMR_CONNECT, SecToTicks(10), Reconnect_Proc);
@@ -225,7 +228,7 @@ void OnCreate(CSM_RAM *data) {
 }
 
 void OnClose(CSM_RAM *csm) {
-    SUBPROC(Close)  ;
+    SUBPROC(Close);
 }
 
 const struct {
